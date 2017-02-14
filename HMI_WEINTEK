@@ -1,0 +1,648 @@
+
+(* @NESTEDCOMMENTS := 'Yes' *)
+(* @PATH := '' *)
+(* @OBJECTFLAGS := '0, 8' *)
+(* @SYMFILEFLAGS := '2048' *)
+PROGRAM HMI_WEINTEK
+VAR
+	Display: POINTER TO ARRAY[0..70] OF WORD;
+	current_screen: BYTE;
+	new_screen_timer: TOF;
+	screen_changed: BOOL;
+	test_csq: BOOL;
+	settime: BOOL;
+	KO_old,PO_old,GRAF_old, TN_old : WORD;
+	point_gsm : ARRAY [0..2] OF WORD:= 9,13,17;
+	XY_KO_PO : ARRAY [0..6,0..2] OF REAL;
+	m:REAL;
+	i: BYTE;
+	j: BYTE;
+	pass_flag : BOOL;
+	pass_change: BOOL;
+	pass_indicator: WORD;
+	TOf_indicator : TOF;
+	trig_pass : R_TRIG;
+	trig_re: R_TRIG;
+	trig_re1: R_TRIG;
+	ton_reset: TON;
+END_VAR
+VAR CONSTANT
+	write : BYTE := 0;
+	read : BYTE :=1;
+	alarm1 : BYTE := 2;
+	alarm2 : BYTE :=3;
+	alarm3 : BYTE :=4;
+	flag : BYTE :=5;
+	control : BYTE :=6;
+	config : BYTE :=7;
+	pass_new : BYTE :=8;
+	pass : BYTE :=9;
+END_VAR
+(* @END_DECLARATION := '0' *)
+Display := ADR(Display_modbus);
+
+trig_re(clk:= Display^[read]=14 AND (tn_old<>REAL_TO_WORD(tn) OR ko_old<>shift OR po_old<>shift_reduce OR graf_old<> angle_trm));
+trig_re1(clk:=Display^[read]=14);
+ton_reset(in:=Display^[read]=31 AND display^[10].0, pt:=T#5s);
+IF ton_reset.Q THEN zavod:=TRUE; END_IF
+IF trig_re1.Q THEN
+	XY_KO_PO[0,0]:=-35;
+	XY_KO_PO[1,0]:=-25;
+	XY_KO_PO[2,0]:=-15;
+	XY_KO_PO[3,0]:=-5;
+	XY_KO_PO[4,0]:=5;
+	XY_KO_PO[5,0]:=15;
+	XY_KO_PO[6,0]:=Tn;
+	FOR i:=0 TO 6 DO
+		FOR j:=i+1 TO 6 DO
+			IF XY_KO_PO[j,0]<XY_KO_PO[i,0] THEN
+				m:=XY_KO_PO[j,0];
+				XY_KO_PO[j,0]:=XY_KO_PO[i,0];
+				XY_KO_PO[i,0]:=m;
+			END_IF
+		END_FOR
+	END_FOR
+	FOR i:=0 TO 6 DO
+		XY_KO_PO[i,1]:=GRAF(shift,shift_reduce,angle_trm,FALSE,XY_KO_PO[i,0],Tpod_max);
+		XY_KO_PO[i,2]:=GRAF(shift,shift_reduce,angle_trm,TRUE,XY_KO_PO[i,0],Tpod_max);
+	END_FOR
+	Display^[14]:=3;
+END_IF
+
+IF trig_re.Q THEN
+	display^[write]:=32;
+	tn_old:=REAL_TO_INT(tn);
+	KO_old:=shift;
+	PO_old:=shift_reduce;
+	graf_old:=angle_trm;
+END_IF
+
+
+pass_flag :=Display^[flag].9;
+pass_change := Display^[flag].10 AND (Display^[read]=19 OR display^[read]=20 OR Display^[read]=29 OR display^[read]=30);
+trig_pass(clk:=pass_change);
+
+tof_indicator(in:=NOT tof_indicator.Q AND pass_change, pt:= T#3s);
+IF NOT tof_indicator.Q THEN pass_indicator:=0; END_IF
+
+Display^[Alarm1] := DWORD_TO_WORD (alarm_flags[0]);
+Display^[Alarm2] := DWORD_TO_WORD (SHR (alarm_flags[0],16));
+Display^[Alarm3] := DWORD_TO_WORD (alarm_flags[1]);
+
+IF (display^[pass]=1991 OR display^[pass]= password) AND pass_flag THEN display^[pass]:=0; display^[write]:=29; display^[read]:=29;END_IF
+IF trig_pass.Q THEN
+	IF display^[pass]=password THEN
+		pass_indicator:=1;
+		password:=display^[pass_new];
+		display^[pass]:=0;
+		display^[pass_new]:=0;
+	ELSE
+		pass_indicator:=2;
+	END_IF
+END_IF
+
+Display^[config].0 := heating_on;		(*112*)
+Display^[config].1 := gvs_on;			(*113*)
+Display^[config].2 := davlenie_on;		(*114*)
+Display^[config].3 := davldatc_on;		(*115*)
+Display^[config].4 := hpump1_on;		(*116*)
+Display^[config].5 := hpump2_on;		(*117*)
+Display^[config].6 := fpump1_on;		(*118*)
+Display^[config].7 := fpump2_on;		(*119*)
+Display^[config].8 := gpump1_on;		(*120*)
+Display^[config].9 := gpump2_on;		(*121*)
+Display^[config].10 := hfc1_on;			(*122*)
+Display^[config].11 := hfc2_on;			(*123*)
+Display^[config].12 := ffc1_on;			(*124*)
+Display^[config].13 := ffc2_on;			(*125*)
+Display^[config].14 := mv110_on;		(*126*)
+Display^[config].15 := podpitka_on;		(*127*)
+
+Display^[flag].0 :=Display^[Alarm1]<>0 OR DIsplay^[Alarm2]<>0 OR Display^[Alarm3]<>0;		(*80 Индикатор аварии*)
+Display^[flag].1 :=gpump1_on AND gpump2_on;													(*81 Индикатор насосов ГВС один или два*)
+Display^[flag].2 :=hpump1_on AND hpump2_on;													(*82 Индикатор насосоа отопления один или два*)
+Display^[flag].3 :=fpump1_on AND fpump2_on;													(*83 Индикатор насосов подпитки один или два*)
+Display^[flag].4 :=gprs_on;																		(*84 вклвыклжопорез*)
+Display^[flag].5:=winter;																			(*85 Индикатор зима/лето*)
+Display^[flag].6:=reduce;																		(*86 Индикатор КО/ПО*)
+Display^[flag].7:=hfc1_on OR hfc2_on;															(*87 Индикатор отображения частоты на отоплении*)
+Display^[flag].8:=ffc1_on OR ffc2_on;															(*88 Индикатор отображения частоты на отоплении*)
+(*9 - pass_flag*)
+(*10 - pass_change*)
+Display^[flag].11:=Foff;																			(*91 вкл выкл информационные смс*)
+(*12 - sms_alarm_on*)
+(*13 - sms_inf_on*)
+(*14 - settime*)
+
+
+
+
+
+
+
+
+
+IF current_screen <> Display^[read] THEN
+	current_screen := WORD_TO_BYTE(Display^[read]);
+	screen_changed := TRUE;
+ELSE
+	screen_changed := FALSE;
+END_IF
+new_screen_timer (in := screen_changed, pt := t#250ms);
+
+settime:=FALSE;
+test_csq:=FALSE;
+
+
+CASE Display^[read] OF
+
+12:	IF new_screen_timer.Q THEN
+		Display^[11] := gTtreb;																			(*Требуемая температура ГВС*)
+	ELSE
+		gTtreb:= WORD_TO_BYTE(Display^[11]);
+	END_IF
+
+	Display^[10] := REAL_TO_WORD (Tn);															(*Уличная температура*)
+	Display^[12] := REAL_TO_WORD (Tgvs);														(*Текущая температура ГВС*)
+	Display^[13] := REAL_TO_WORD (hTtreb);														(*Текущая температура отопления*)
+	Display^[14] := REAL_TO_WORD (Tpod);														(*Отопление подача*)
+	Display^[15] := REAL_TO_WORD (Tobr);														(*отопление обратка*)
+	Display^[16] := hpos;																			(*Позиция клапана отопления*)
+	Display^[17] := gpos;																			(*Позиция клапана гвс*)
+	Display^[18] := REAL_TO_WORD (Ppod*10);													(*Давление подачи Х10*)
+	Display^[19] := REAL_TO_WORD (Pobr*10);													(*Давление обратки Х10*)
+	Display^[20] := RealTime.TimeAndDate.Hour;													(*часы минуты день месяц год*)
+	Display^[21] := RealTime.TimeAndDate.Minute;
+	Display^[22] := RealTime.TimeAndDate.Day;
+	Display^[23] := RealTime.TimeAndDate.Month;
+	Display^[24] := RealTime.TimeAndDate.Year;
+	IF gvs_on THEN
+		IF gpump1_on AND gpump2_on THEN													(*ГВС включено и введены 2 насоса*)
+			IF gpump[0] THEN Display^[25]:=2; ELSE DIsplay^[25]:=1; END_IF					(*если включен насос, верхний насос в анимации, иначе не в анимации*)
+			Display^[26]:=0;																		(*Центральный насос невидим*)
+			IF gpump[1] THEN Display^[27]:=2; ELSE DIsplay^[27]:=1; END_IF					(*если включен насос, нижний насос в анимации, иначе не в анимации*)
+		ELSE																					(*ГВС включен и введен 1 насос1*)
+			Display^[25]:=0;																		(*Верхний насос невидим*)
+			IF gpump[0] OR gpump[1] THEN Display^[26]:=2; ELSE Display^[26]:=1; END_IF		(*Если включен насос, центральный насос в анимации, иначе не в анимации*)
+			Display^[27]:=0;																		(*Нижний насос невидим*)
+		END_IF
+	ELSE
+		IF gpump1_on AND gpump2_on THEN													(*ГВС выключено, но картинка всё равно не может быть пустой. Если были включены 2 насоса, то верхний и нижний статичны, центральный невидим*)
+			Display^[25]:=1;
+			Display^[26]:=0;
+			Display^[27]:=1;
+		END_IF
+		IF gpump1_on XOR gpump2_on OR NOT gpump1_on AND NOT gpump2_on THEN		(*Если был хотя бы один включен, то центральный статичен, верхний и нижный невидимы*)
+			Display^[25]:=0;
+			Display^[26]:=1;
+			Display^[27]:=0;
+		END_IF
+	END_IF
+
+	IF heating_on THEN
+			IF hpump1_on AND hpump2_on THEN												(*Отопление включено и введены 2 насоса*)
+			IF hpump[0] THEN Display^[28]:=2; ELSE DIsplay^[28]:=1; END_IF					(*если включен насос, верхний насос в анимации, иначе не в анимации*)
+			Display^[29]:=0;																		(*Центральный насос невидим*)
+			IF hpump[1] THEN Display^[30]:=2; ELSE DIsplay^[30]:=1; END_IF					(*если включен насос, нижний насос в анимации, иначе не в анимации*)
+		ELSE																					(*Отопление включено и введен 1 насос1*)
+			Display^[28]:=0;																		(*Верхний насос невидим*)
+			IF hpump[0] OR hpump[1] THEN Display^[29]:=2; ELSE Display^[29]:=1; END_IF		(*Если включен насос, центральный насос в анимации, иначе не в анимации*)
+			Display^[30]:=0;																		(*Нижний насос невидим*)
+		END_IF
+	ELSE
+		IF hpump1_on AND hpump2_on THEN													(*Отопление выключено, но картинка всё равно не может быть пустой. Если были включены 2 насоса, то верхний и нижний статичны, центральный невидим*)
+			Display^[28]:=1;
+			Display^[29]:=0;
+			Display^[30]:=1;
+		END_IF
+		IF hpump1_on XOR hpump2_on OR NOT hpump1_on AND NOT hpump2_on THEN													(*Если был хотя бы один включен, то центральный статичен, верхний и нижный невидимы*)
+			Display^[28]:=0;
+			Display^[29]:=1;
+			Display^[30]:=0;
+		END_IF
+	END_IF
+
+	IF podpitka_on THEN
+		IF fpump1_on AND fpump2_on THEN													(*Подпитка включена и введены 2 насоса*)
+			IF fpump[0] THEN Display^[31]:=2; ELSE DIsplay^[31]:=1; END_IF					(*если включен насос, верхний насос в анимации, иначе не в анимации*)
+			Display^[32]:=0;																		(*Центральный насос невидим*)
+			IF fpump[1] THEN Display^[33]:=2; ELSE DIsplay^[33]:=1; END_IF					(*если включен насос, нижний насос в анимации, иначе не в анимации*)
+		ELSE																					(*Подпитка включена и введен 1 насос1*)
+			Display^[31]:=0;																		(*Верхний насос невидим*)
+			IF fpump[0] OR fpump[1] THEN Display^[32]:=2; ELSE Display^[32]:=1; END_IF		(*Если включен насос, центральный насос в анимации, иначе не в анимации*)
+			Display^[33]:=0;																		(*Нижний насос невидим*)
+		END_IF
+	END_IF																					(*Иначе не надо, т.к. закроется ширмой вся подпитка*)
+
+	IF hfc1_freq_read<>0 THEN
+		Display^[34]:=hfc1_freq_read*10;
+	ELSIF hfc2_freq_read<>0 THEN
+		Display^[34]:=hfc2_freq_read*10;
+	END_IF
+	IF hfc1_freq_read=0 AND  hfc2_freq_read=0 THEN
+		Display^[34]:=0;
+	END_IF
+
+	IF ffc1_freq_read<>0 THEN
+		Display^[35]:=ffc1_freq_read*10;
+	ELSIF ffc2_freq_read<>0 THEN
+		Display^[35]:=ffc2_freq_read*10;
+	END_IF
+	IF ffc1_freq_read=0 AND  ffc2_freq_read=0 THEN
+		Display^[35]:=0;
+	END_IF
+	IF hfc1_freq_read<> 0 THEN DISPLAY^[36]:=hfc1_freq_read; ELSE DISPLAY^[36]:=hfc2_freq_read; END_IF
+	IF ffc1_freq_read<> 0 THEN DISPLAY^[37]:=ffc1_freq_read;  ELSE DISPLAY^[37]:=ffc2_freq_read; END_IF
+	Display^[38].0 :=manual_hvalve;  (*608*)
+	Display^[38].1 :=manual_gvalve;  (*609*)
+	Display^[38].2 :=manual_hpump; (*610*)
+	Display^[38].3 :=manual_gpump; (*611*)
+	Display^[38].4 :=manual_fpump;   (*612*)
+
+
+
+
+14,32:	IF REAL_TO_WORD(tn)<>tn_old OR shift<>KO_old OR shift_reduce<>PO_old OR angle_trm<>GRAF_OLD THEN
+		TN_OLD:=REAL_TO_WORD(Tn);
+		KO_old:=shift;
+		PO_old:=shift_reduce;
+		GRAF_old := angle_trm;
+		XY_KO_PO[0,0]:=-35;
+		XY_KO_PO[1,0]:=-25;
+		XY_KO_PO[2,0]:=-15;
+		XY_KO_PO[3,0]:=-5;
+		XY_KO_PO[4,0]:=5;
+		XY_KO_PO[5,0]:=15;
+		XY_KO_PO[6,0]:=Tn;
+		FOR i:=0 TO 6 DO
+			FOR j:=i+1 TO 6 DO
+				IF XY_KO_PO[j,0]<XY_KO_PO[i,0] THEN
+					m:=XY_KO_PO[j,0];
+					XY_KO_PO[j,0]:=XY_KO_PO[i,0];
+					XY_KO_PO[i,0]:=m;
+				END_IF
+			END_FOR
+		END_FOR
+		FOR i:=0 TO 6 DO
+			XY_KO_PO[i,1]:=GRAF(shift,shift_reduce,angle_trm,FALSE,XY_KO_PO[i,0],Tpod_max);
+			XY_KO_PO[i,2]:=GRAF(shift,shift_reduce,angle_trm,TRUE,XY_KO_PO[i,0],Tpod_max);
+		END_FOR
+	END_IF
+
+
+
+	IF new_screen_timer.q THEN
+		Display^[10]:=shift;							(*ТОЧКИ КО*)
+		Display^[11]:=shift_reduce;
+		Display^[12]:=angle_trm;
+		Display^[15]:=7;
+		Display^[16]:=REAL_TO_WORD(-35);
+		Display^[17]:=15;
+		Display^[18]:=20;
+		Display^[19]:=100;
+		Display^[20]:= REAL_TO_WORD(XY_KO_PO[0,0]);
+		Display^[21]:= REAL_TO_WORD(XY_KO_PO[0,1]);
+		Display^[22]:= REAL_TO_WORD(XY_KO_PO[1,0]);
+		Display^[23]:= REAL_TO_WORD(XY_KO_PO[1,1]);
+		Display^[24]:= REAL_TO_WORD(XY_KO_PO[2,0]);
+		Display^[25]:= REAL_TO_WORD(XY_KO_PO[2,1]);
+		Display^[26]:= REAL_TO_WORD(XY_KO_PO[3,0]);
+		Display^[27]:= REAL_TO_WORD(XY_KO_PO[3,1]);
+		Display^[28]:= REAL_TO_WORD(XY_KO_PO[4,0]);
+		Display^[29]:= REAL_TO_WORD(XY_KO_PO[4,1]);
+		Display^[30]:= REAL_TO_WORD(XY_KO_PO[5,0]);
+		Display^[31]:= REAL_TO_WORD(XY_KO_PO[5,1]);
+		Display^[32]:= REAL_TO_WORD(XY_KO_PO[6,0]);
+		Display^[33]:= REAL_TO_WORD(XY_KO_PO[6,1]);
+
+		Display^[34]:=REAL_TO_WORD(-35);				(*ТОЧКИ ПО*)
+		Display^[35]:=15;
+		Display^[36]:=20;
+		Display^[37]:=100;
+		Display^[38]:= REAL_TO_WORD(XY_KO_PO[0,0]);
+		Display^[39]:= REAL_TO_WORD(XY_KO_PO[0,2]);
+		Display^[40]:= REAL_TO_WORD(XY_KO_PO[1,0]);
+		Display^[41]:= REAL_TO_WORD(XY_KO_PO[1,2]);
+		Display^[42]:= REAL_TO_WORD(XY_KO_PO[2,0]);
+		Display^[43]:= REAL_TO_WORD(XY_KO_PO[2,2]);
+		Display^[44]:= REAL_TO_WORD(XY_KO_PO[3,0]);
+		Display^[45]:= REAL_TO_WORD(XY_KO_PO[3,2]);
+		Display^[46]:= REAL_TO_WORD(XY_KO_PO[4,0]);
+		Display^[47]:= REAL_TO_WORD(XY_KO_PO[4,2]);
+		Display^[48]:= REAL_TO_WORD(XY_KO_PO[5,0]);
+		Display^[49]:= REAL_TO_WORD(XY_KO_PO[5,2]);
+		Display^[50]:= REAL_TO_WORD(XY_KO_PO[6,0]);
+		Display^[51]:= REAL_TO_WORD(XY_KO_PO[6,2]);
+
+		Display^[52]:=REAL_TO_WORD(-35);					(*ТОЧКИ УЛИЧНОЙ ТЕМПЕРАТУРЫ*)
+		Display^[53]:=15;
+		Display^[54]:=20;
+		Display^[55]:=100;
+		Display^[56]:=REAL_TO_INT(Tn);
+		Display^[57]:=15;
+		Display^[58]:=REAL_TO_INT(Tn);
+		Display^[59]:=25;
+		Display^[60]:=REAL_TO_INT(Tn);
+		Display^[61]:=30;
+		Display^[62]:=REAL_TO_INT(Tn);
+		Display^[63]:=40;
+		Display^[64]:=REAL_TO_INT(Tn);
+		Display^[65]:=50;
+		Display^[66]:=REAL_TO_INT(Tn);
+		Display^[67]:=70;
+		Display^[68]:=REAL_TO_INT(Tn);
+		Display^[69]:=110;
+		Display^[14]:=3;
+
+	ELSE
+		shift:=WORD_TO_BYTE(Display^[10]);
+		shift_reduce :=WORD_TO_BYTE( Display^[11]);
+		angle_trm:=WORD_TO_BYTE(Display^[12]);
+	END_IF
+		Display^[13]:=REAL_TO_WORD(tn);
+
+
+
+15: (*расписание отопления будни*)
+	IF new_screen_timer.q THEN
+		Display^[24] := DWORD_TO_WORD (hrasp [0]);
+		Display^[25] := DWORD_TO_WORD ( SHR (hrasp [0], 16));
+	ELSE
+		hrasp [0] := Display^[24];
+		hrasp [0] := hrasp [0] OR SHL (Display^[25], 16);
+	END_IF
+
+16: (*расписание отопления выходные*)
+	IF new_screen_timer.q THEN
+		Display^[24] := DWORD_TO_WORD (hrasp [1]);
+		Display^[25] := DWORD_TO_WORD ( SHR (hrasp [1], 16));
+	ELSE
+		hrasp [1] := Display^[24];
+		hrasp [1] := hrasp [1] OR SHL (Display^[25], 16);
+	END_IF
+
+17: (*расписание ГВС будни*)
+	IF new_screen_timer.q THEN
+		Display^[24] := DWORD_TO_WORD (grasp [0]);
+		Display^[25] := DWORD_TO_WORD ( SHR (grasp [0], 16));
+	ELSE
+		grasp [0] := Display^[24];
+		grasp [0] := grasp [0] OR SHL (Display^[25], 16);
+	END_IF
+
+18: (*расписание ГВС выходные*)
+	IF new_screen_timer.q THEN
+		Display^[24] := DWORD_TO_WORD (grasp [1]);
+		Display^[25] := DWORD_TO_WORD ( SHR (grasp [1], 16));
+	ELSE
+		grasp [1] := Display^[24];
+		grasp [1] := grasp [1] OR SHL (Display^[25], 16);
+	END_IF
+
+19:
+	IF new_screen_timer.q THEN
+		Display^[10] := Twinter;
+		Display^[11] := Tpod_max;
+		Display^[12] := hTdop;
+		Display^[13] := htsm;
+		Display^[14].0:= heating_on;
+		Display^[14].1:=hpump1_on;
+		Display^[14].2:=hpump2_on;
+	ELSE
+		Twinter:= WORD_TO_BYTE(Display^[10]);
+		Tpod_max:=WORD_TO_BYTE(Display^[11]);
+		hTdop:=WORD_TO_BYTE(Display^[12]);
+		htsm:=WORD_TO_BYTE(Display^[13]);
+		heating_on:=Display^[14].0;
+		hpump1_on:= Display^[14].1;
+		hpump2_on:=Display^[14].2;
+	END_IF
+
+20:
+	IF new_screen_timer.q THEN
+		Display^[10] := gTtreb;
+		Display^[11] := gTdop;
+		Display^[12] := gTsm;
+		Display^[13] := gchange;
+		Display^[14].0:=gvs_on;
+		Display^[14].1:=gpump1_on;
+		Display^[14].2:=gpump2_on;
+	ELSE
+		gTtreb:= WORD_TO_BYTE(Display^[10]);
+		gTdop:=WORD_TO_BYTE(Display^[11]);
+		gtsm:=WORD_TO_BYTE(Display^[12]);
+		gchange:=WORD_TO_BYTE(Display^[13]);
+		gvs_on:=Display^[14].0;
+		gpump1_on:=Display^[14].1;
+		gpump2_on:=Display^[14].2;
+	END_IF
+
+21:
+	IF new_screen_timer.q THEN
+		Display^[10] := REAL_TO_WORD (dPtreb * 10);
+		Display^[11] := REAL_TO_WORD (dPdop * 10);
+		Display^[12] := REAL_TO_WORD (Pmax * 10);
+		Display^[13] := REAL_TO_WORD (Psh * 10);
+		Display^[14] := freq_alarm;
+		Display^[15] := hchange;
+	ELSE
+		dPtreb:= WORD_TO_REAL(Display^[10])/10;
+		dPdop:= WORD_TO_REAL(Display^[11])/10;
+		Pmax:= WORD_TO_REAL(Display^[12])/10;
+		Psh:= WORD_TO_REAL(Display^[13])/10;
+		freq_alarm:= Display^[14];
+		hchange:= WORD_TO_BYTE(Display^[15]);
+	END_IF
+
+22:
+	IF new_screen_timer.q THEN
+		Display^[10] := REAL_TO_WORD (fPoff * 10);
+		Display^[11] := REAL_TO_WORD (fPon * 10);
+		Display^[12] := fchange;
+		Display^[14].0:= NOT foff;
+		Display^[14].1:=fpump1_on;
+		Display^[14].2:=fpump2_on;
+	ELSE
+		fPoff:=WORD_TO_REAL(Display^[10])/10;
+		fPon:=WORD_TO_REAL(Display^[11])/10;
+		fchange:=WORD_TO_BYTE(Display^[12]);
+		foff:= NOT Display^[14].0;
+		fpump1_on:=Display^[14].1;
+		fpump2_on:=Display^[14].2;
+	END_IF
+
+23:
+	IF new_screen_timer.Q THEN
+		Display^[10]:=point_gsm[0];
+		Display^[11]:=point_gsm[1];
+		Display^[12]:=point_gsm[2];
+		Display^[14] := DWORD_TO_WORD (SHR (PHONE_TO_DWORD(phones[0]), 16));
+		Display^[13] := DWORD_TO_WORD (PHONE_TO_DWORD(phones[0]));
+		Display^[16] := DWORD_TO_WORD (SHR (PHONE_TO_DWORD(phones[1]), 16));
+		Display^[15] := DWORD_TO_WORD (PHONE_TO_DWORD(phones[1]));
+		Display^[18] := DWORD_TO_WORD (SHR (PHONE_TO_DWORD(phones[2]), 16));
+		Display^[17] := DWORD_TO_WORD (PHONE_TO_DWORD(phones[2]));
+		Display^[20] := DWORD_TO_WORD (SHR (PHONE_TO_DWORD(phones[3]), 16));
+		Display^[19] := DWORD_TO_WORD (PHONE_TO_DWORD(phones[3]));
+		Display^[22] := DWORD_TO_WORD (SHR (PHONE_TO_DWORD(phones[4]), 16));
+		Display^[21] := DWORD_TO_WORD (PHONE_TO_DWORD(phones[4]));
+		Display^[24] := DWORD_TO_WORD (SHR (PHONE_TO_DWORD(phones[5]), 16));
+		Display^[23] := DWORD_TO_WORD (PHONE_TO_DWORD(phones[5]));
+		Display^[flag].12:=sms_alarm_on;
+		Display^[flag].13:=sms_inf_on;
+	ELSE
+		sms_alarm_on := Display^[flag].12;
+		sms_inf_on := Display^[flag].13;
+		point_gsm[0]:=Display^[10];
+		point_gsm[1]:=Display^[11];
+		point_gsm[2]:=Display^[12];
+		phones[0] := PHONE_TO_STRING (display^[13] OR SHL (WORD_TO_DWORD (display^[14]), 16));
+		phones[1] := PHONE_TO_STRING (display^[15] OR SHL (WORD_TO_DWORD (display^[16]), 16));
+		phones[2] := PHONE_TO_STRING (display^[17] OR SHL (WORD_TO_DWORD (display^[18]), 16));
+		phones[3] := PHONE_TO_STRING (display^[19] OR SHL (WORD_TO_DWORD (display^[20]), 16));
+		phones[4] := PHONE_TO_STRING (display^[21] OR SHL (WORD_TO_DWORD (display^[22]), 16));
+		phones[5] := PHONE_TO_STRING (display^[23] OR SHL (WORD_TO_DWORD (display^[24]), 16));
+	END_IF
+
+
+24:
+	IF new_screen_timer.q THEN
+		Display^[10] := RealTime.TimeAndDate.Hour;
+		Display^[11] := RealTime.TimeAndDate.Minute;
+		Display^[12] := RealTime.TimeAndDate.Day;
+		Display^[13] := RealTime.TimeAndDate.Month;
+		Display^[14] := RealTime.TimeAndDate.Year;
+	END_IF
+	settime := Display^[flag].14;
+
+25:
+	IF new_screen_timer.q THEN
+		Display^[control].0 := manual_hvalve;		(*режим ручного управления клапаном отопления*)
+		Display^[control].1 := manual_gvalve;		(*режим ручного управления клапаном гвс*)
+		Display^[control].2 := manual_hpump;	(*режим ручного управления насосами отопления*)
+		Display^[control].3 := manual_gpump;	(*режим ручного управления насосами гвс*)
+		Display^[control].4 := manual_fpump; 	(*режим ручного управления насосами подпитки*)
+		Display^[control].5 := manual_fvalve;		(*режим ручного управления клапаном подпитки*)
+		Display^[control].6 := m_fvalve;	(*клапан подпитки*)
+		Display^[control].7 := m_hpump [0];
+		Display^[control].8 := m_hpump [1];
+		Display^[control].9 := m_gpump [0];
+		Display^[control].10 := m_gpump [1];
+		Display^[control].11 := m_fpump [0];
+		Display^[control].12 := m_fpump [1];
+		Display^[13] := m_hpos;		(*требуемая позиция клапана отопления в ручном режиме*)
+		Display^[14] := m_gpos;		(*требуемая позиция клапана отопления в ручном режиме*)
+		Display^[15] := m_hfreq [0];	(*скорость насоса 1 в ручном режиме, Гц*)
+		Display^[16] := m_hfreq [1];	(*скорость насоса 2 в ручном режиме, Гц*)
+		Display^[17] := m_ffreq [0];	(*скорость насоса в ручном режиме, Гц*)
+		Display^[18] := m_ffreq [1];	(*скорость насоса в ручном режиме, Гц*)
+		Display^[19] := m_gfreq [0];	(*скорость насоса в ручном режиме, Гц*)
+		Display^[20] := m_gfreq [1];	(*скорость насоса в ручном режиме, Гц*)
+	ELSE
+		manual_hvalve := Display^[control].0;		(*режим ручного управления клапаном отопления*)
+		manual_gvalve := Display^[control].1;		(*режим ручного управления клапаном гвс*)
+		manual_hpump := Display^[control].2;	(*режим ручного управления насосами отопления*)
+		manual_gpump := Display^[control].3;	(*режим ручного управления насосами гвс*)
+		manual_fpump := Display^[control].4; 	(*режим ручного управления насосами подпитки*)
+		manual_fvalve := Display^[control].5;		(*режим ручного управления клапаном подпитки*)
+		m_fvalve := Display^[control].6;			(*клапан подпитки*)
+		m_hpump [0] := Display^[control].7;
+		m_hpump [1] := Display^[control].8;
+		m_gpump [0] := Display^[control].9;
+		 m_gpump [1] := Display^[control].10;
+		m_fpump [0] := Display^[control].11;
+		m_fpump [1] := Display^[control].12;
+		m_hpos := WORD_TO_BYTE (Display^[13]);		(*требуемая позиция клапана отопления в ручном режиме*)
+		m_gpos := WORD_TO_BYTE (Display^[14]);		(*требуемая позиция клапана отопления в ручном режиме*)
+		m_hfreq [0] := WORD_TO_BYTE (Display^[15]);	(*скорость насоса 1 в ручном режиме, Гц*)
+		m_hfreq [1] := WORD_TO_BYTE (Display^[16]);	(*скорость насоса 2 в ручном режиме, Гц*)
+		m_ffreq [0] := WORD_TO_BYTE (Display^[17]);	(*скорость насоса в ручном режиме, Гц*)
+		m_ffreq [1] := WORD_TO_BYTE (Display^[18]);	(*скорость насоса в ручном режиме, Гц*)
+		m_gfreq [0] := WORD_TO_BYTE (Display^[19]);	(*скорость насоса  1 в ручном режиме, Гц*)
+		m_gfreq [1] := WORD_TO_BYTE (Display^[20]);	(*скорость насоса 2 в ручном режиме, Гц*)
+	END_IF
+
+29:
+	IF new_screen_timer.Q THEN
+		Display^[10]:=gprs_device;
+		Display^[11]:=gprs_time[0];
+		Display^[12]:=gprs_time[1];
+		Display^[13]:=gprs_time[2];
+		Display^[15] := DWORD_TO_WORD (SHR (PHONE_TO_DWORD(phones_gprs[0]), 16));
+		Display^[14] := DWORD_TO_WORD (PHONE_TO_DWORD(phones_gprs[0]));
+		Display^[17] := DWORD_TO_WORD (SHR (PHONE_TO_DWORD(phones_gprs[1]), 16));
+		Display^[16] := DWORD_TO_WORD (PHONE_TO_DWORD(phones_gprs[1]));
+		Display^[19] := DWORD_TO_WORD (SHR (PHONE_TO_DWORD(phones_gprs[2]), 16));
+		Display^[18] := DWORD_TO_WORD (PHONE_TO_DWORD(phones_gprs[2]));
+		display^[20].0:=modem_on;
+	ELSE
+		modem_on:=Display^[20].0;
+		gprs_device:=WORD_TO_BYTE(Display^[10]);
+		gprs_time[0]:=WORD_TO_BYTE(Display^[11]);
+		gprs_time[1]:=WORD_TO_BYTE(Display^[12]);
+		gprs_time[2]:=WORD_TO_BYTE(Display^[13]);
+		phones_gprs[0] := PHONE_TO_STRING (display^[14] OR SHL (WORD_TO_DWORD (display^[15]), 16));
+		phones_gprs[1] := PHONE_TO_STRING (display^[16] OR SHL (WORD_TO_DWORD (display^[17]), 16));
+		phones_gprs[2] := PHONE_TO_STRING (display^[18] OR SHL (WORD_TO_DWORD (display^[19]), 16));
+	END_IF
+	Display^[25]:=pass_indicator;
+
+30:
+	IF new_screen_timer.Q THEN
+		Display^[19]:=REAL_TO_WORD(hxp*10);
+		Display^[11]:=REAL_TO_WORD(hti*100);
+		Display^[12]:=REAL_TO_WORD(htd*100);
+		Display^[13]:=REAL_TO_WORD(gxp*10);
+		Display^[14]:=REAL_TO_WORD(gti*100);
+		Display^[15]:=REAL_TO_WORD(gtd*100);
+		Display^[16]:=REAL_TO_WORD(nxp*10);
+		Display^[17]:=REAL_TO_WORD(nti*100);
+		Display^[18]:=REAL_TO_WORD(ntd*100);
+		Display^[10].0:= hfc1_on;
+		Display^[10].1:=hfc2_on;
+		Display^[10].2:= ffc1_on;
+		Display^[10].3:= ffc2_on;
+		Display^[10].4:=heating_on;
+		Display^[10].5:=gvs_on;
+		Display^[10].6:=podpitka_on;
+		Display^[10].7:=davlenie_on;
+		Display^[10].8:=davldatc_on;
+		Display^[10].9:=mv110_on;
+	ELSE
+		hfc1_on:=Display^[10].0;
+		hfc2_on:=Display^[10].1;
+		ffc1_on:=Display^[10].2;
+		ffc2_on:=Display^[10].3;
+		heating_on:=Display^[10].4;
+		gvs_on:=Display^[10].5;
+		podpitka_on:=Display^[10].6;
+		davlenie_on:=Display^[10].7;
+		davldatc_on:=Display^[10].8;
+		mv110_on:=Display^[10].9;
+		hxp := WORD_TO_REAL(Display^[19])/10;
+		hti:=WORD_TO_REAL(Display^[11])/100;
+		htd:=WORD_TO_REAL(Display^[12])/100;
+		gxp := WORD_TO_REAL(Display^[13])/10;
+		gti:=WORD_TO_REAL(Display^[14])/100;
+		gtd:=WORD_TO_REAL(Display^[15])/100;
+		nxp := WORD_TO_REAL(Display^[16])/10;
+		nti:=WORD_TO_REAL(Display^[17])/100;
+		ntd:=WORD_TO_REAL(Display^[18])/100;
+	END_IF
+	Display^[25]:=pass_indicator;
+
+31:
+	Display^[25]:=pass_indicator;
+	
+
+END_CASE
+
+
+
+
+
+
+
+
+
+END_PROGRAM
